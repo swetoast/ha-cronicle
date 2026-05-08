@@ -1,0 +1,125 @@
+run_event:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        text:
+    id:
+      required: false
+      selector:
+        text:
+    title:
+      required: false
+      selector:
+        text:
+
+abort_job:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        text:
+    id:
+      required: true
+      selector:
+        text:
+
+update_job:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        text:
+    id:
+      required: true
+      selector:
+        text:
+    timeout:
+      required: false
+      selector:
+        number:
+          min: 1
+          mode: box
+    retries:
+      required: false
+      selector:
+        number:
+          min: 0
+          mode: box
+    retry_delay:
+      required: false
+      selector:
+        number:
+          min: 0
+          mode: box
+    chain:
+      required: false
+      selector:
+        text:
+    chain_error:
+      required: false
+      selector:
+        text:
+    notify_success:
+      required: false
+      selector:
+        text:
+    notify_fail:
+      required: false
+      selector:
+        text:
+    web_hook:
+      required: false
+      selector:
+        text:
+    cpu_limit:
+      required: false
+      selector:
+        number:
+          min: 0
+          mode: box
+    cpu_sustain:
+      required: false
+      selector:
+        number:
+          min: 0
+          mode: box
+    memory_limit:
+      required: false
+      selector:
+        number:
+          min: 0
+          mode: box
+    memory_sustain:
+      required: false
+      selector:
+        number:
+          min: 0
+          mode: box
+    log_max_size:
+      required: false
+      selector:
+        number:
+          min: 0
+          mode: box
+
+enable_scheduler:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        text:
+
+disable_scheduler:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        text:
+
+refresh:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        text:

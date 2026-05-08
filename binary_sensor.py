@@ -9,6 +9,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntityDescription,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -35,6 +36,24 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[CronicleBinarySensorDescription, ...] = (
         device_class=BinarySensorDeviceClass.PROBLEM,
         icon="mdi:alert-circle-outline",
     ),
+    CronicleBinarySensorDescription(
+        key="active_jobs_running",
+        name="Active Jobs Running",
+        device_class=BinarySensorDeviceClass.RUNNING,
+        icon="mdi:play-circle-outline",
+    ),
+    CronicleBinarySensorDescription(
+        key="api_connected",
+        name="API Connected",
+        device_class=BinarySensorDeviceClass.CONNECTIVITY,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    CronicleBinarySensorDescription(
+        key="problem",
+        name="Problem",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
 )
 
 
@@ -56,12 +75,13 @@ async def async_setup_entry(
 ) -> None:
     coordinator: CronicleCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
-        CronicleBinarySensor(coordinator, entry, desc)
-        for desc in BINARY_SENSOR_DESCRIPTIONS
+        CronicleBinarySensor(coordinator, entry, desc) for desc in BINARY_SENSOR_DESCRIPTIONS
     )
 
 
 class CronicleBinarySensor(CoordinatorEntity[CronicleCoordinator], BinarySensorEntity):
+    """Cronicle binary sensor."""
+
     entity_description: CronicleBinarySensorDescription
     _attr_has_entity_name = True
 
@@ -87,18 +107,22 @@ class CronicleBinarySensor(CoordinatorEntity[CronicleCoordinator], BinarySensorE
 
         if key == "scheduler_enabled":
             return data.scheduler_enabled
-
         if key == "last_job_failed":
             last = self._last_job()
-            if last is None:
-                return None
-            return last.code != 0
-
+            return None if last is None else last.code != 0
+        if key == "active_jobs_running":
+            return bool(data.active_jobs)
+        if key == "api_connected":
+            return self.coordinator.last_error is None
+        if key == "problem":
+            last = self._last_job()
+            return self.coordinator.last_error is not None or (last is not None and last.code != 0)
         return None
 
     @property
     def extra_state_attributes(self) -> dict:
-        if self.entity_description.key == "last_job_failed":
+        key = self.entity_description.key
+        if key == "last_job_failed":
             last = self._last_job()
             if last is not None:
                 return {
@@ -107,4 +131,6 @@ class CronicleBinarySensor(CoordinatorEntity[CronicleCoordinator], BinarySensorE
                     "description": last.description,
                     "hostname": last.hostname,
                 }
+        if key == "problem":
+            return {"last_error": self.coordinator.last_error}
         return {}

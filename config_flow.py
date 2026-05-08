@@ -38,6 +38,8 @@ STEP_SCHEMA = vol.Schema(
 
 
 class CronicleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a Cronicle config flow."""
+
     VERSION = 1
 
     async def async_step_user(self, user_input: dict | None = None) -> FlowResult:
@@ -79,6 +81,8 @@ class CronicleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class CronicleOptionsFlow(config_entries.OptionsFlow):
+    """Handle Cronicle options."""
+
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._config_entry = config_entry
 
@@ -103,9 +107,7 @@ class CronicleOptionsFlow(config_entries.OptionsFlow):
                         CONF_RECENT_JOBS_COUNT,
                         default=cur.get(
                             CONF_RECENT_JOBS_COUNT,
-                            data.get(
-                                CONF_RECENT_JOBS_COUNT, DEFAULT_RECENT_JOBS_COUNT
-                            ),
+                            data.get(CONF_RECENT_JOBS_COUNT, DEFAULT_RECENT_JOBS_COUNT),
                         ),
                     ): vol.All(int, vol.Range(min=1, max=MAX_RECENT_JOBS_COUNT)),
                 }

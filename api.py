@@ -12,7 +12,8 @@ _LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class ActiveJob:
-    """Represents a currently-running Cronicle job."""
+    """Represents a currently running Cronicle job."""
+
     id: str
     event: str
     title: str
@@ -33,6 +34,7 @@ class ActiveJob:
 @dataclass
 class CompletedJob:
     """Represents one row in get_history."""
+
     id: str
     event: str
     title: str
@@ -49,11 +51,16 @@ class CompletedJob:
 
 @dataclass
 class CronicleData:
+    """Single collected Cronicle data snapshot."""
+
     scheduler_enabled: bool = False
     active_jobs: list[ActiveJob] = field(default_factory=list)
     total_events: int = 0
     enabled_events: int = 0
+    disabled_events: int = 0
     recent_jobs: list[CompletedJob] = field(default_factory=list)
+    history_total: int = 0
+    errors: list[str] = field(default_factory=list)
 
 
 class CronicleAPIError(Exception):
@@ -83,40 +90,30 @@ class CronicleClient:
         try:
             async with self._session.get(
                 url, headers=self._headers, timeout=aiohttp.ClientTimeout(total=10)
-            ) as r:
-                r.raise_for_status()
-                data = await r.json()
-        except aiohttp.ClientError as e:
-            raise CronicleAPIError(f"HTTP error on {endpoint}: {e}") from e
-        if data.get("code") != 0:
-            raise CronicleAPIError(
-                f"Cronicle returned code={data.get('code')} on {endpoint}: "
-                f"{data.get('description')}"
-            )
-        return data
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
+        except aiohttp.ClientError as err:
+            raise CronicleAPIError(f"HTTP error on {endpoint}: {err}") from err
+        return _validate_response(endpoint, data)
 
-    async def _post(self, endpoint: str, payload: dict) -> dict:
+    async def _post(self, endpoint: str, payload: dict | None = None) -> dict:
         url = f"{self._base}/{endpoint}/v1"
         try:
             async with self._session.post(
                 url,
                 headers=self._headers,
-                json=payload,
+                json=payload or {},
                 timeout=aiohttp.ClientTimeout(total=10),
-            ) as r:
-                r.raise_for_status()
-                data = await r.json()
-        except aiohttp.ClientError as e:
-            raise CronicleAPIError(f"HTTP error on {endpoint}: {e}") from e
-        if data.get("code") != 0:
-            raise CronicleAPIError(
-                f"Cronicle returned code={data.get('code')} on {endpoint}: "
-                f"{data.get('description')}"
-            )
-        return data
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
+        except aiohttp.ClientError as err:
+            raise CronicleAPIError(f"HTTP error on {endpoint}: {err}") from err
+        return _validate_response(endpoint, data)
 
     async def fetch_all(self) -> CronicleData:
-        """Fetch all data in parallel; populate a CronicleData snapshot."""
+        """Fetch the Cronicle state used by entities."""
         results = await asyncio.gather(
             self._get("get_master_state"),
             self._get("get_active_jobs"),
@@ -127,47 +124,82 @@ class CronicleClient:
 
         data = CronicleData()
 
-        # ── Master state ─────────────────────────────────────────────────────
         if isinstance(results[0], dict):
-            data.scheduler_enabled = bool(
-                results[0].get("state", {}).get("enabled", 0)
-            )
-        elif isinstance(results[0], Exception):
-            _LOGGER.warning("get_master_state failed: %s", results[0])
+            data.scheduler_enabled = bool(results[0].get("state", {}).get("enabled", 0))
+        else:
+            _append_error(data, "get_master_state", results[0])
 
-        # ── Active jobs ──────────────────────────────────────────────────────
         if isinstance(results[1], dict):
-            jobs_raw = results[1].get("jobs", {})
-            data.active_jobs = [_parse_active_job(j) for j in jobs_raw.values()]
-        elif isinstance(results[1], Exception):
-            _LOGGER.warning("get_active_jobs failed: %s", results[1])
+            jobs_raw = results[1].get("jobs", {}) or {}
+            data.active_jobs = [_parse_active_job(job) for job in jobs_raw.values()]
+        else:
+            _append_error(data, "get_active_jobs", results[1])
 
-        # ── Schedule ─────────────────────────────────────────────────────────
         if isinstance(results[2], dict):
-            rows = results[2].get("rows", [])
-            data.total_events = results[2].get("list", {}).get("length", len(rows))
-            data.enabled_events = sum(1 for e in rows if e.get("enabled"))
-        elif isinstance(results[2], Exception):
-            _LOGGER.warning("get_schedule failed: %s", results[2])
+            rows = results[2].get("rows", []) or []
+            data.total_events = int(results[2].get("list", {}).get("length", len(rows)) or 0)
+            data.enabled_events = sum(1 for event in rows if event.get("enabled"))
+            data.disabled_events = max(data.total_events - data.enabled_events, 0)
+        else:
+            _append_error(data, "get_schedule", results[2])
 
-        # ── History ──────────────────────────────────────────────────────────
         if isinstance(results[3], dict):
-            rows = results[3].get("rows", [])
-            data.recent_jobs = [_parse_completed_job(r) for r in rows]
-            _LOGGER.debug(
-                "Fetched %d history row(s); first time_end=%s, time_start=%s, elapsed=%s",
-                len(rows),
-                rows[0].get("time_end") if rows else None,
-                rows[0].get("time_start") if rows else None,
-                rows[0].get("elapsed") if rows else None,
-            )
-        elif isinstance(results[3], Exception):
-            _LOGGER.warning("get_history failed: %s", results[3])
+            rows = results[3].get("rows", []) or []
+            data.recent_jobs = [_parse_completed_job(row) for row in rows]
+            data.history_total = int(results[3].get("list", {}).get("length", len(rows)) or 0)
+        else:
+            _append_error(data, "get_history", results[3])
 
         return data
 
     async def test_connection(self) -> None:
+        """Validate API connectivity."""
         await self._get("get_master_state")
+
+    async def run_event(self, event_id: str | None = None, title: str | None = None) -> dict:
+        """Run an event immediately by ID or exact title."""
+        payload = _id_or_title_payload(event_id, title)
+        return await self._post("run_event", payload)
+
+    async def abort_job(self, job_id: str) -> dict:
+        """Abort a running job."""
+        return await self._post("abort_job", {"id": job_id})
+
+    async def update_job(self, job_id: str, **kwargs) -> dict:
+        """Update a running job."""
+        payload = {"id": job_id}
+        payload.update({key: value for key, value in kwargs.items() if value is not None})
+        return await self._post("update_job", payload)
+
+    async def set_scheduler_enabled(self, enabled: bool) -> dict:
+        """Enable or disable the Cronicle scheduler."""
+        return await self._post("update_master_state", {"enabled": 1 if enabled else 0})
+
+    async def get_job_status(self, job_id: str) -> dict:
+        """Fetch status for one job."""
+        return await self._post("get_job_status", {"id": job_id})
+
+
+def _validate_response(endpoint: str, data: dict) -> dict:
+    if data.get("code") != 0:
+        raise CronicleAPIError(
+            f"Cronicle returned code={data.get('code')} on {endpoint}: {data.get('description')}"
+        )
+    return data
+
+
+def _append_error(data: CronicleData, endpoint: str, err) -> None:
+    message = f"{endpoint}: {err}"
+    data.errors.append(message)
+    _LOGGER.warning("Cronicle API call failed: %s", message)
+
+
+def _id_or_title_payload(event_id: str | None, title: str | None) -> dict:
+    if event_id:
+        return {"id": event_id}
+    if title:
+        return {"title": title}
+    raise CronicleAPIError("Either id or title is required")
 
 
 def _parse_active_job(raw: dict) -> ActiveJob:
@@ -209,11 +241,10 @@ def _parse_completed_job(raw: dict) -> CompletedJob:
     )
 
 
-def _to_float(v) -> float:
-    """Defensive float conversion — Cronicle sometimes returns strings."""
-    if v is None or v == "":
+def _to_float(value) -> float:
+    if value is None or value == "":
         return 0.0
     try:
-        return float(v)
+        return float(value)
     except (TypeError, ValueError):
         return 0.0
